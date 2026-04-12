@@ -28,7 +28,14 @@ Cusp cusp_from_frac(int64_t p, int64_t q)
 
 Cusp cusp_from_rat(Rat r)
 {
+#if defined(RAT_BACKEND_BUILTIN)
     return cusp_from_frac(r.num, r.den);
+#else
+    /* cusp_from_rat is only meaningful for the builtin backend.
+     * Other backends do not represent rational numbers as p/q fractions. */
+    (void)r;
+    return cusp_inf();
+#endif
 }
 
 /* -----------------------------------------------------------------------

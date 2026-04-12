@@ -28,6 +28,8 @@ ManinElt *melt_new(void)
 void melt_free(ManinElt *e)
 {
     if (!e) return;
+    for (int i = 0; i < e->len; i++)
+        rat_clear(&e->coeffs[i]);
     free(e->indices);
     free(e->coeffs);
     free(e);
@@ -46,7 +48,10 @@ ManinElt *melt_copy(const ManinElt *e)
         return NULL;
     }
     memcpy(c->indices, e->indices, (size_t)e->len * sizeof(int));
-    memcpy(c->coeffs,  e->coeffs,  (size_t)e->len * sizeof(Rat));
+    for (int i = 0; i < e->len; i++) {
+        c->coeffs[i] = rat_zero();
+        rat_set(&c->coeffs[i], e->coeffs[i]);
+    }
     return c;
 }
 
@@ -77,9 +82,10 @@ int melt_add_term(ManinElt *e, int idx, Rat c)
     /* lo == position where idx should be. */
     if (lo < e->len && e->indices[lo] == idx) {
         /* Merge: add coefficients. */
-        Rat sum;
-        if (rat_add(e->coeffs[lo], c, &sum) != RAT_OK) return -1;
-        e->coeffs[lo] = sum;
+        Rat sum = rat_zero();
+        if (rat_add(e->coeffs[lo], c, &sum) != RAT_OK) { rat_clear(&sum); return -1; }
+        rat_set(&e->coeffs[lo], sum);
+        rat_clear(&sum);
         return 0;
     }
     /* Insert new term at position lo. */
@@ -90,8 +96,10 @@ int melt_add_term(ManinElt *e, int idx, Rat c)
             (size_t)(e->len - lo) * sizeof(int));
     memmove(e->coeffs  + lo + 1, e->coeffs  + lo,
             (size_t)(e->len - lo) * sizeof(Rat));
-    e->indices[lo] = idx;
-    e->coeffs[lo]  = c;
+    /* lo+1..len are valid (memmoved from lo..len-1); init lo fresh. */
+    e->indices[lo]  = idx;
+    e->coeffs[lo]   = rat_zero();
+    rat_set(&e->coeffs[lo], c);
     e->len++;
     return 0;
 }
@@ -101,21 +109,27 @@ void melt_compact(ManinElt *e)
     int w = 0;
     for (int r = 0; r < e->len; r++) {
         if (!rat_is_zero(e->coeffs[r])) {
-            e->indices[w] = e->indices[r];
-            e->coeffs[w]  = e->coeffs[r];
+            if (w < r) {
+                e->indices[w] = e->indices[r];
+                rat_set(&e->coeffs[w], e->coeffs[r]);
+            }
             w++;
         }
     }
+    /* Clear positions w..len-1 (zeros or values that were moved). */
+    for (int r = w; r < e->len; r++)
+        rat_clear(&e->coeffs[r]);
     e->len = w;
 }
 
 int melt_scale(ManinElt *e, Rat r)
 {
+    Rat prod = rat_zero();
     for (int i = 0; i < e->len; i++) {
-        Rat prod;
-        if (rat_mul(e->coeffs[i], r, &prod) != RAT_OK) return -1;
-        e->coeffs[i] = prod;
+        if (rat_mul(e->coeffs[i], r, &prod) != RAT_OK) { rat_clear(&prod); return -1; }
+        rat_set(&e->coeffs[i], prod);
     }
+    rat_clear(&prod);
     melt_compact(e);
     return 0;
 }

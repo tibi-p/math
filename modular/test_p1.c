@@ -12,20 +12,36 @@ static void test_rat(void)
     Rat r;
 
     assert(rat_add(a, b, &r) == RAT_OK);
+#if defined(RAT_BACKEND_BUILTIN)
     assert(r.num == 5 && r.den == 6);  /* 1/2 + 1/3 = 5/6 */
+#else
+    assert(rat_eq(r, rat_make(5, 6)));
+#endif
 
     assert(rat_mul(a, b, &r) == RAT_OK);
+#if defined(RAT_BACKEND_BUILTIN)
     assert(r.num == 1 && r.den == 6);  /* 1/2 * 1/3 = 1/6 */
+#else
+    assert(rat_eq(r, rat_make(1, 6)));
+#endif
 
     assert(rat_sub(a, b, &r) == RAT_OK);
+#if defined(RAT_BACKEND_BUILTIN)
     assert(r.num == 1 && r.den == 6);  /* 1/2 - 1/3 = 1/6 */
+#else
+    assert(rat_eq(r, rat_make(1, 6)));
+#endif
 
     Rat c = rat_make(3, 4);
     Rat d = rat_make(6, 8);
     assert(rat_eq(c, d));              /* both reduce to 3/4 */
 
     assert(rat_inv(a, &r) == RAT_OK);
+#if defined(RAT_BACKEND_BUILTIN)
     assert(r.num == 2 && r.den == 1);  /* inv(1/2) = 2 */
+#else
+    assert(rat_eq(r, rat_int(2)));
+#endif
 
     /* Division by zero. */
     assert(rat_inv(rat_zero(), &r) == RAT_DIVZERO);

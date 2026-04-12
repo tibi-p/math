@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include <inttypes.h>
 
+void rat_init(Rat *r)  { (void)r; }
+void rat_clear(Rat *r) { (void)r; }
+
 /* -----------------------------------------------------------------------
  * Internal helpers
  * ----------------------------------------------------------------------- */
@@ -183,6 +186,11 @@ int rat_scale(Rat *r, int64_t n)
     *r = result;
     return RAT_OK;
 }
+
+void rat_set(Rat *dst, Rat src)    { *dst = src; }
+void rat_set_zero(Rat *r)          { r->num = 0; r->den = 1; }
+void rat_set_one(Rat *r)           { r->num = 1; r->den = 1; }
+void rat_set_si(Rat *r, int64_t n) { r->num = n; r->den = 1; }
 
 void rat_print(Rat r)
 {

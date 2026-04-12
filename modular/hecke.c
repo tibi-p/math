@@ -65,52 +65,33 @@ ManinElt *hecke_action_on_symbol(const P1Table *t, int sym_idx, int p)
      */
     if (N % p == 0) {
         if (c % p == 0) {
-            /* Case 1: p divides c. 
-             * In the geometry of X_0(N), this symbol is connected to the cusp 
-             * at infinity. The sum over the p transversals collapses to exactly 
-             * one primitive symbol: [c/p : d]. */
             int64_t nc = c / p;
             int64_t nd = d;
-
-            /* C's modulo operator (%) can return negative numbers. 
-             * We wrap it to ensure positive indices in [0, N-1]. */
             int mod_c = ((nc % N) + N) % N;
             int mod_d = ((nd % N) + N) % N;
             int idx = p1_index(t, mod_c, mod_d);
-
             if (idx >= 0) {
                 if (melt_add_term(result, idx, one) != 0) {
-                    melt_free(result); return NULL;
+                    rat_clear(&one); melt_free(result); return NULL;
                 }
             }
         } else {
-            /* Case 2: p does not divide c. 
-             * The sum yields p distinct symbols. Mathematically, applying M_j 
-             * gives the coordinates [c*p : d*p - j*c]. */
             for (int j = 0; j < p; j++) {
                 int64_t nc = c * (int64_t)p;
                 int64_t nd = d * (int64_t)p - c * (int64_t)j;
-
-                /* The resulting coordinates might not be coprime. 
-                 * We divide out the greatest common divisor to project them 
-                 * back onto the projective line P^1(Q). */
                 int64_t g = manin_gcd(nc, nd);
-                if (g > 1) {
-                    nc /= g;
-                    nd /= g;
-                }
-
+                if (g > 1) { nc /= g; nd /= g; }
                 int mod_c = ((nc % N) + N) % N;
                 int mod_d = ((nd % N) + N) % N;
                 int idx = p1_index(t, mod_c, mod_d);
-
                 if (idx >= 0) {
                     if (melt_add_term(result, idx, one) != 0) {
-                        melt_free(result); return NULL;
+                        rat_clear(&one); melt_free(result); return NULL;
                     }
                 }
             }
         }
+        rat_clear(&one);
         melt_compact(result);
         return result;
     }
@@ -159,10 +140,9 @@ ManinElt *hecke_action_on_symbol(const P1Table *t, int sym_idx, int p)
                         int mod_d = ((nd % N) + N) % N;
                         int idx = p1_index(t, mod_c, mod_d);
 
-                        /* Accumulate the resulting symbol into our linear combination */
                         if (idx >= 0) {
                             if (melt_add_term(result, idx, one) != 0) {
-                                melt_free(result); return NULL;
+                                rat_clear(&one); melt_free(result); return NULL;
                             }
                         }
                     }
@@ -171,7 +151,7 @@ ManinElt *hecke_action_on_symbol(const P1Table *t, int sym_idx, int p)
         }
     }
 
-    /* Remove any terms that cancelled out to 0 and compress the memory array */
+    rat_clear(&one);
     melt_compact(result);
     return result;
 }
@@ -187,28 +167,37 @@ ManinElt *hecke_action_on_symbol(const P1Table *t, int sym_idx, int p)
 static Rat *manin_elt_to_coords(const CuspidalSpace *cs, const ManinElt *e)
 {
     int dim = cs->dim;
-    int mu  = cs->p1->mu;
-    (void)mu;
 
     Rat *v = malloc((size_t)dim * sizeof(Rat));
     if (!v) return NULL;
     for (int i = 0; i < dim; i++) v[i] = rat_zero();
 
+    Rat prod = rat_zero();
+    Rat acc  = rat_zero();
+
     /* v = coord * e_sparse */
     for (int k = 0; k < e->len; k++) {
         int col = e->indices[k];
-        Rat c   = e->coeffs[k];
+        Rat c   = e->coeffs[k]; /* read-only alias — do NOT rat_clear */
         if (rat_is_zero(c)) continue;
         for (int i = 0; i < dim; i++) {
-            Rat prod, sum;
             if (rat_mul(dmat_get(cs->coord, i, col), c, &prod) != RAT_OK)
-                { free(v); return NULL; }
-            if (rat_add(v[i], prod, &sum) != RAT_OK)
-                { free(v); return NULL; }
-            v[i] = sum;
+                goto fail;
+            if (rat_add(v[i], prod, &acc) != RAT_OK)
+                goto fail;
+            rat_set(&v[i], acc);
         }
     }
+    rat_clear(&prod);
+    rat_clear(&acc);
     return v;
+
+fail:
+    rat_clear(&prod);
+    rat_clear(&acc);
+    for (int i = 0; i < dim; i++) rat_clear(&v[i]);
+    free(v);
+    return NULL;
 }
 
 /* -----------------------------------------------------------------------
@@ -237,15 +226,18 @@ DenseMat *cspace_hecke_matrix(const CuspidalSpace *cs, int p)
             if (!ti) { melt_free(accum); dmat_free(Tp); return NULL; }
 
             /* Add bij * ti into accum. */
+            Rat scaled = rat_zero();
             for (int k = 0; k < ti->len; k++) {
-                Rat scaled;
                 if (rat_mul(bij, ti->coeffs[k], &scaled) != RAT_OK) {
+                    rat_clear(&scaled);
                     melt_free(ti); melt_free(accum); dmat_free(Tp); return NULL;
                 }
                 if (melt_add_term(accum, ti->indices[k], scaled) != 0) {
+                    rat_clear(&scaled);
                     melt_free(ti); melt_free(accum); dmat_free(Tp); return NULL;
                 }
             }
+            rat_clear(&scaled);
             melt_free(ti);
         }
         melt_compact(accum);
@@ -256,7 +248,8 @@ DenseMat *cspace_hecke_matrix(const CuspidalSpace *cs, int p)
         if (!coords) { dmat_free(Tp); return NULL; }
 
         for (int i = 0; i < dim; i++)
-            *dmat_at(Tp, i, j) = coords[i];
+            rat_set(dmat_at(Tp, i, j), coords[i]);
+        for (int i = 0; i < dim; i++) rat_clear(&coords[i]);
         free(coords);
     }
     return Tp;
@@ -332,13 +325,13 @@ CuspidalSpace *cspace_build(int N)
     /* Fill relation rows. */
     for (int r = 0; r < nrel; r++)
         for (int c = 0; c < mu; c++)
-            *dmat_at(combined, r, c) = rat_int(rel_dense[r * mu + c]);
+            rat_set_si(dmat_at(combined, r, c), rel_dense[r * mu + c]);
 
     /* Fill boundary rows (transpose of bdy_dense). */
     for (int cusp = 0; cusp < ncusps; cusp++) {
         for (int i = 0; i < mu; i++) {
             int v = bdy_dense[i * max_cusps + cusp];
-            *dmat_at(combined, nrel + cusp, i) = rat_int(v);
+            rat_set_si(dmat_at(combined, nrel + cusp, i), v);
         }
     }
 
@@ -379,7 +372,7 @@ CuspidalSpace *cspace_build(int N)
         if (!bT) goto fail;
         for (int i = 0; i < cs->dim; i++)
             for (int j = 0; j < mu; j++)
-                *dmat_at(bT, j, i) = dmat_get(cs->basis, i, j);
+                rat_set(dmat_at(bT, j, i), dmat_get(cs->basis, i, j));
 
         /* G = basis * bT  (dim × dim) */
         DenseMat *G = dmat_mul(cs->basis, bT);
