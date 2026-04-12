@@ -283,40 +283,58 @@ The **cuspidal subspace** is ker(δ) ∩ (quotient by S and T relations). This i
 
 ### Algorithm 3: Hecke Operator T_p Action on Manin Symbols
 
-**Input:** prime p (with p ∤ N for the unramified case), Manin symbol index i.
-**Output:** `ManinElt` representing T_p · x_i.
+**Input:** prime p, Manin symbol index i (with bottom row (c, d)).
+**Output:** `ManinElt` representing T_p · x_i (or U_p · x_i when p | N).
 
-**Double coset decomposition:** For p ∤ N, the Hecke operator T_p corresponds to the double coset Γ₀(N) [[p,0],[0,1]] Γ₀(N), which decomposes into p+1 single cosets:
+The two cases — p ∤ N and p | N — require fundamentally different formulas.
 
+---
+
+#### Case 1: T_p, p ∤ N — Heilbronn matrices
+
+The naïve approach of picking coset representatives `[[1,j],[0,p]]` and left-multiplying the SL₂(ℤ) lift γ fails: the bottom rows `(pc, pd)` of `M·γ` are identical for all j, producing p copies of the same symbol. The correct tool is the **Heilbronn matrix set**.
+
+A **Heilbronn matrix** for p is an integer matrix `H = [[A,B],[C,D]]` satisfying:
 ```
-Δ_p = { [[1, j], [0, p]] : j = 0, …, p-1 }  ∪  { [[p, 0], [0, 1]] }
+det(H) = A*D - B*C = p,   A > B ≥ 0,   D > C ≥ 0.
 ```
 
-For each M ∈ Δ_p, compute the product M · γ (where γ = [[a,b],[c,d]] is the SL₂(ℤ) lift of the symbol) and reduce back to a Manin symbol. The product M · γ has determinant p; apply the **coset reduction algorithm**:
+Merel proved that summing over all Heilbronn matrices for p gives the correct Hecke action on modular symbols: the set automatically re-triangulates broken Farey paths back onto the fundamental domain edges without requiring explicit coset reduction.
 
-**Coset reduction (det-p matrix → Manin symbol):**
+**Right action on the bottom row:** For Manin symbol [c:d] and Heilbronn matrix H:
+```
+(c, d) · [[A, B], [C, D]]  =  (c*A + d*C,  c*B + d*D)
+```
+Reduce by GCD, then look up in the P1 table:
+```
+nc = c*A + d*C;   nd = c*B + d*D
+g  = gcd(nc, nd);  nc /= g;  nd /= g
+idx = p1_index(t, nc % N, nd % N)
+```
 
-Given Π = [[A, B], [C, D]] with det(Π) = p, find:
-1. Compute (C mod N, D mod N) — the candidate bottom row.
-2. Verify gcd(gcd(C, D), N) = 1; if not, there is a conceptual error.
-3. Look up `p1_index(t, C mod N, D mod N)` — this gives the Manin symbol index directly.
+**Enumeration of Heilbronn matrices:** Iterate over A ∈ [1,p], B ∈ [0,A), C ∈ [0,p−A]. Compute `rem = p + B*C`; emit `[[A,B],[C,D]]` with `D = rem/A` only when `A | rem` and `D > C`.
 
-The key insight: even though Π ∉ SL₂(ℤ), the bottom row (C mod N, D mod N) determines a unique Manin symbol (Shimura's theorem: the Hecke action is well-defined on cosets).
+---
 
-**Explicit action for T_p · [c : d]:**
+#### Case 2: U_p, p | N — explicit formula
 
-Lift (c, d) to γ = [[a, b], [c, d]] ∈ SL₂(ℤ). Then:
+When p | N, the operator is U_p (not T_p) and the Heilbronn approach does not apply. The action splits on whether p divides the bottom-left coordinate c.
 
-| Matrix M | Product M·γ | Bottom row |
-|---|---|---|
-| [[1, j], [0, p]], j = 0..p-1 | [[a+jc, b+jd], [pc, pd]] | (pc mod N, pd mod N) |
-| [[p, 0], [0, 1]] | [[pa, pb], [c, d]] | (c mod N, d mod N) |
+**Subcase 2a — p | c:** The p transversals collapse to a single image:
+```
+[c : d]  →  [c/p : d]
+```
+Look up `p1_index(t, (c/p) % N, d % N)`.
 
-Each bottom row is normalised via `p1_index` to get the contributing Manin symbol index. The result is the formal sum of p+1 Manin symbols (with coefficient +1 each, before applying the S/T quotient).
+**Subcase 2b — p ∤ c:** The action produces p distinct images:
+```
+for j = 0..p-1:  [c : d]  →  [c*p : d*p - j*c]   (then reduce by GCD)
+```
+For each j: `nc = c*p`, `nd = d*p - j*c`, reduce by `gcd(nc, nd)`, then look up.
 
-For p | N (Atkin–Lehner case): omit the [[p, 0], [0, 1]] term; T_p has only p cosets.
+---
 
-**Building the T_p matrix:** For each basis vector of the cuspidal subspace (a row of the kernel basis found above), apply the Hecke action, express the result in the same basis, and assemble the μ_cusp × μ_cusp matrix. This is done by solving a linear system (or using the precomputed change-of-basis from the elimination step).
+**Building the T_p matrix:** For each basis vector of the cuspidal subspace (a row of `cs->basis`, a μ-vector), compute the Hecke image as a `ManinElt` by applying the action to each nonzero Manin symbol and accumulating. Then project the result into cuspidal coordinates via `cs->coord` to get one column of the dim × dim Hecke matrix.
 
 ---
 

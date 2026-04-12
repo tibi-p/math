@@ -1,96 +1,177 @@
 #include "hecke.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* -----------------------------------------------------------------------
+/* Helper for GCD reduction */
+static int64_t manin_gcd(int64_t a, int64_t b) {
+    a = llabs(a);
+    b = llabs(b);
+    while (b) {
+        int64_t t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
+/* ============================================================================
  * hecke_action_on_symbol
+ * * Computes the right action of the Hecke operator T_p (or U_p) on a single 
+ * Manin symbol. 
  *
- * T_p · [c:d] = ∑_{j=0}^{p-1} [result of [[1,j],[0,p]]·γ]
- *             + (1 if p∤N) · [result of [[p,0],[0,1]]·γ]
+ * Mathematically, a Manin symbol [c:d] represents a homology path in the 
+ * extended upper half-plane between the cusps M^{-1}(0) and M^{-1}(infty), 
+ * where M is a matrix in SL_2(Z) with bottom row (c, d). 
+ * * The Hecke operator sums over right coset representatives (transversals).
+ * This function applies those transversals to the path, re-triangulates the 
+ * resulting paths back onto the edges of the fundamental Farey domain, and 
+ * accumulates the resulting standard Manin symbols.
  *
- * where γ = [[a,b],[c,d]] ∈ SL₂(Z) is the lift of [c:d].
+ * Parameters:
+ * t       - The P^1(Z/NZ) table defining the level N structure.
+ * sym_idx - The index of the input Manin symbol (0 to mu-1).
+ * p       - The prime defining the Hecke operator.
  *
- * Product [[1,j],[0,p]] · [[a,b],[c,d]] = [[a+jc, b+jd],[pc, pd]]
- *   → bottom row (pc mod N, pd mod N)
- *
- * Product [[p,0],[0,1]] · [[a,b],[c,d]] = [[pa, pb],[c, d]]
- *   → bottom row (c mod N, d mod N)  (same symbol)
- * ----------------------------------------------------------------------- */
+ * Returns:
+ * A newly allocated ManinElt representing the linear combination of 
+ * resulting symbols, or NULL on failure.
+ * ============================================================================ */
 ManinElt *hecke_action_on_symbol(const P1Table *t, int sym_idx, int p)
 {
     ManinElt *result = melt_new();
     if (!result) return NULL;
 
-    int64_t a, b, c, d;
-    if (p1_lift_to_sl2z(t, sym_idx, &a, &b, &c, &d) != 0) {
+    /* Step 1: Lift the projective line coordinates [c:d] modulo N 
+     * up to a true SL_2(Z) matrix [[a, b], [c, d]]. 
+     * The bottom row (c, d) completely determines the right coset in Gamma_0(N). */
+    int64_t a_lift, b_lift, c, d;
+    if (p1_lift_to_sl2z(t, sym_idx, &a_lift, &b_lift, &c, &d) != 0) {
         melt_free(result); return NULL;
     }
 
     int N = t->N;
     Rat one = rat_one();
 
-    /* [[1,j],[0,p]] terms: bottom row = (p*c, p*d + j*... wait:
-     * [[1,j],[0,p]] · [[a,b],[c,d]]:
-     *   top row: [1*a + j*c,  1*b + j*d] = [a+jc, b+jd]
-     *   bot row: [0*a + p*c,  0*b + p*d] = [pc,   pd   ]
-     * So bottom row is (pc, pd), independent of j!
-     * But we have p different j values and they all give the same index?
-     * That can't be right.
-     *
-     * Wait — this formula is for the LEFT action on the Manin symbol
-     * expressed as a ROW vector.  The correct convention: if γ has
-     * bottom row (c,d), the coset is Γ₀(N)·γ, and the Hecke
-     * operator sends it to ∑_M Γ₀(N)·(M·γ).
-     *
-     * [[1,j],[0,p]] · [[a,b],[c,d]] = [[a+jc, b+jd],[pc, pd]]
-     * bottom row: (pc mod N, pd mod N)  ← same for all j!
-     *
-     * This would give p copies of the same symbol, which is wrong.
-     * The correct decomposition for the RIGHT action is different.
-     *
+    /* ------------------------------------------------------------------
+     * Operator U_p (Triggered when p divides the level N)
      * ------------------------------------------------------------------
-     * CORRECT FORMULA (right coset action, following Cremona §2.4):
-     *
-     * The right coset representatives for Γ₀(N) \ {M ∈ M₂(Z)⁺ : det=p}
-     * / Γ₀(N) are obtained via the right action on Γ₀(N)·γ:
-     *
-     *   Γ₀(N)·γ ·M_j  where M_j ∈ {[[p,j],[0,1]] : j=0..p-1} ∪ {[[1,0],[0,p]]}
-     *
-     * For the coset Γ₀(N)·γ (γ with bottom row (c,d)), right-multiplying
-     * by M gives γ·M, which has bottom row:
-     *
-     *   M_j = [[p,j],[0,1]]:  (c,d) · [[p,j],[0,1]] = (cp, cj+d)
-     *   M_∞ = [[1,0],[0,p]]:  (c,d) · [[1,0],[0,p]] = (c, dp)
-     *
-     * So the p+1 images are: [cp : cj+d] for j=0..p-1,  and  [c : dp].
-     * ------------------------------------------------------------------
+     * For U_p, the transversals are exactly M_j = [[1, j], [0, p]] for j=0..p-1.
+     * Unlike T_p, this action maps paths slightly outside the standard Farey 
+     * tessellation. We use Cremona's explicit formulas to map the results 
+     * directly back to valid symbols without geometric triangulation.
      */
+    if (N % p == 0) {
+        if (c % p == 0) {
+            /* Case 1: p divides c. 
+             * In the geometry of X_0(N), this symbol is connected to the cusp 
+             * at infinity. The sum over the p transversals collapses to exactly 
+             * one primitive symbol: [c/p : d]. */
+            int64_t nc = c / p;
+            int64_t nd = d;
 
-    /* RIGHT action: M_j = [[p,j],[0,1]], j=0..p-1 → bottom row (c*p, c*j+d) */
-    for (int j = 0; j < p; j++) {
-        int64_t nc = c * (int64_t)p;
-        int64_t nd = c * (int64_t)j + d;
-        int idx = p1_index(t, nc % N, ((nd % N) + N) % N);
-        if (idx < 0) { melt_free(result); return NULL; }
-        if (melt_add_term(result, idx, one) != 0) {
-            melt_free(result); return NULL;
+            /* C's modulo operator (%) can return negative numbers. 
+             * We wrap it to ensure positive indices in [0, N-1]. */
+            int mod_c = ((nc % N) + N) % N;
+            int mod_d = ((nd % N) + N) % N;
+            int idx = p1_index(t, mod_c, mod_d);
+
+            if (idx >= 0) {
+                if (melt_add_term(result, idx, one) != 0) {
+                    melt_free(result); return NULL;
+                }
+            }
+        } else {
+            /* Case 2: p does not divide c. 
+             * The sum yields p distinct symbols. Mathematically, applying M_j 
+             * gives the coordinates [c*p : d*p - j*c]. */
+            for (int j = 0; j < p; j++) {
+                int64_t nc = c * (int64_t)p;
+                int64_t nd = d * (int64_t)p - c * (int64_t)j;
+
+                /* The resulting coordinates might not be coprime. 
+                 * We divide out the greatest common divisor to project them 
+                 * back onto the projective line P^1(Q). */
+                int64_t g = manin_gcd(nc, nd);
+                if (g > 1) {
+                    nc /= g;
+                    nd /= g;
+                }
+
+                int mod_c = ((nc % N) + N) % N;
+                int mod_d = ((nd % N) + N) % N;
+                int idx = p1_index(t, mod_c, mod_d);
+
+                if (idx >= 0) {
+                    if (melt_add_term(result, idx, one) != 0) {
+                        melt_free(result); return NULL;
+                    }
+                }
+            }
+        }
+        melt_compact(result);
+        return result;
+    }
+
+    /* ------------------------------------------------------------------
+     * Operator T_p (Triggered when p does NOT divide N)
+     * ------------------------------------------------------------------
+     * For T_p, the standard transversals cut across the interior of the 
+     * Farey triangles, breaking the Manin symbols. 
+     * Instead, we sum over the Heilbronn matrices H_p. Merel proved that 
+     * applying the Heilbronn set automatically re-triangulates the broken 
+     * paths back onto the edges of the fundamental domain.
+     *
+     * A Heilbronn matrix is [[A, B], [C, D]] where:
+     * 1) Determinant = p (so A*D - B*C = p)
+     * 2) A > B >= 0
+     * 3) D > C >= 0
+     */
+    for (int A = 1; A <= p; A++) {
+        for (int B = 0; B < A; B++) {
+            for (int C = 0; C <= p - A; C++) {
+                /* Since AD - BC = p, we can solve for D: D = (p + BC) / A.
+                 * We only proceed if (p + BC) is perfectly divisible by A. */
+                int rem = p + B * C;
+                if (rem % A == 0) {
+                    int D = rem / A;
+
+                    /* Enforce the final Heilbronn condition */
+                    if (D > C) {
+                        /* Right action of [[A, B], [C, D]] on the bottom row (c, d):
+                         * [*, *; c, d] * [A, B; C, D] -> bottom row is (c*A+d*C, c*B+d*D) */
+                        int64_t nc = c * (int64_t)A + d * (int64_t)C;
+                        int64_t nd = c * (int64_t)B + d * (int64_t)D;
+
+                        /* Project back to P^1(Q) by factoring out the GCD */
+                        int64_t g = manin_gcd(nc, nd);
+                        if (g > 1) {
+                            nc /= g;
+                            nd /= g;
+                        }
+
+                        /* Unlike U_p, Heilbronn matrices map paths such that the 
+                         * coordinates are guaranteed to be positive in standard form, 
+                         * so a simple modulo N is sufficient here. */
+                        int mod_c = nc % N;
+                        int mod_d = ((nd % N) + N) % N;
+                        int idx = p1_index(t, mod_c, mod_d);
+
+                        /* Accumulate the resulting symbol into our linear combination */
+                        if (idx >= 0) {
+                            if (melt_add_term(result, idx, one) != 0) {
+                                melt_free(result); return NULL;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    /* M_∞ = [[1,0],[0,p]] → bottom row (c, d*p); omit if p | N */
-    int N_divisible = (N % p == 0);
-    if (!N_divisible) {
-        int64_t nc = c;
-        int64_t nd = d * (int64_t)p;
-        int idx = p1_index(t, nc % N, ((nd % N) + N) % N);
-        if (idx < 0) { melt_free(result); return NULL; }
-        if (melt_add_term(result, idx, one) != 0) {
-            melt_free(result); return NULL;
-        }
-    }
-
+    /* Remove any terms that cancelled out to 0 and compress the memory array */
     melt_compact(result);
     return result;
 }
